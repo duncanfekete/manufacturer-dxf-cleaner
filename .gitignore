@@ -1,0 +1,17 @@
+# Private input and generated output.
+/datasets/private_dataset/
+/results/
+/cmds
+
+# Local Python environment and bytecode.
+/.venv/
+__pycache__/
+*.py[cod]
+
+# Local environment variables.
+.env
+.env.local
+.env.*.local
+
+# macOS metadata.
+.DS_Store

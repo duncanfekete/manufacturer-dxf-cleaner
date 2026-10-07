@@ -1,0 +1,10 @@
+{
+  "no_parts": 1,
+  "parts": [
+    {
+      "external_geometry": 1,
+      "internal_geometry": 2,
+      "internal_dividers": 1
+    }
+  ]
+}
