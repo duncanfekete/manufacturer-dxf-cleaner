@@ -21,7 +21,6 @@ from dxf_editing_functions.seperate_into_layers import count_internal_dividers, 
 
 
 class PartGeometry(TypedDict):
-    external_geometry: int
     internal_geometry: int
     internal_dividers: int
 
@@ -30,11 +29,6 @@ class PartGeometry(TypedDict):
 class DXFProcessingResult:
     output_paths: list[str] = field(default_factory=list)
     parts: list[PartGeometry] = field(default_factory=list)
-
-    @property
-    def no_parts(self) -> int:
-        return len(self.output_paths)
-
 
 # 1. Create results directory for a given DXF file path
 def create_results_directory(file_path: str) -> str:
@@ -165,9 +159,6 @@ def organize_layers(file_paths: list[str]) -> DXFProcessingResult:
         separate_layers(doc).saveas(output_path)
         modelspace = doc.modelspace()
         result.parts.append({
-            "external_geometry": len(modelspace.query(
-                'LWPOLYLINE POLYLINE CIRCLE[layer=="EXTERNAL_GEOMETRY"]'
-            )),
             "internal_geometry": len(modelspace.query(
                 'LWPOLYLINE POLYLINE CIRCLE[layer=="INTERNAL_GEOMETRY"]'
             )),
@@ -184,7 +175,7 @@ def process_dxf_file(file_path: str) -> DXFProcessingResult:
     3. Splits the DXF into separate parts.
     4. Organizes layers for each part.
 
-    Returns final processed paths, per-part geometry counts, and the number of parts.
+    Returns final processed paths and per-part internal geometry/divider counts.
     """
     original_file = create_results_directory(file_path)
     edge_joined_file = join_part_edges(original_file)

@@ -1,5 +1,4 @@
 {
-  "no_parts": 0,
   "parts": [],
   "needs_review": true,
   "review_reason": "The drawing has two disconnected CUT profiles and a separate FOLD layer; confirm whether it represents one assembly or two manufactured parts and which profiles are intentional."

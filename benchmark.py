@@ -40,7 +40,6 @@ class DXFRegistry:
             if dxf.error is not None:
                 print(f"Error: {dxf.error}")
             print(f"Expected Parts: {dxf.expected_parts}, Resolved Parts: {dxf.resolved_parts}")
-            print(f"Expected No Parts: {dxf.expected_no_parts}, Resolved No Parts: {dxf.resolved_no_parts}")
 
         print(f"Total Passed: {self.pass_count} out of {self.total_count}")
 
@@ -74,9 +73,7 @@ class DXFRegistry:
 
 class DXF(BaseModel):
     root_directory: str
-    expected_no_parts: int
     expected_parts: list[PartGeometry]
-    resolved_no_parts: int = 0
     resolved_parts: list[PartGeometry] = Field(default_factory=list)
     needs_review: bool = False
     review_reason: str | None = None
@@ -86,12 +83,10 @@ class DXF(BaseModel):
         """
         Runs full DXF clean and breakdown process.
         """
-        self.resolved_no_parts = 0
         self.resolved_parts = []
         self.error = None
         result = process_dxf_file(self.root_directory)
         self.resolved_parts = result.parts
-        self.resolved_no_parts = result.no_parts
 
     @property
     def passed(self) -> bool:
@@ -99,9 +94,6 @@ class DXF(BaseModel):
             not self.needs_review
             and
             self.error is None
-            and self.expected_no_parts == self.resolved_no_parts
-            and len(self.expected_parts) == self.expected_no_parts
-            and len(self.resolved_parts) == self.resolved_no_parts
             and sorted(tuple(sorted(part.items())) for part in self.expected_parts)
             == sorted(tuple(sorted(part.items())) for part in self.resolved_parts)
         )
@@ -120,7 +112,6 @@ def collect_dxf_from_directory(root_directory: str) -> list[DXF]:
 
         benchmarks.append(DXF(
             root_directory=str(dxf_path),
-            expected_no_parts=expected_geometry["no_parts"],
             expected_parts=expected_geometry["parts"],
             needs_review=expected_geometry.get("needs_review", False),
             review_reason=expected_geometry.get("review_reason"),

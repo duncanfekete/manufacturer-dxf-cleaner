@@ -64,10 +64,8 @@ Expected metadata uses named counts for each part:
 
 ```json
 {
-	"no_parts": 1,
 	"parts": [
 		{
-			"external_geometry": 1,
 			"internal_geometry": 3,
 			"internal_dividers": 0
 		}
@@ -75,6 +73,8 @@ Expected metadata uses named counts for each part:
 }
 ```
 
+An empty `parts` list means the DXF contains no parts. Each listed part implicitly
+has one external profile, so only internal geometry and divider counts are stored.
 Part order does not affect matching, but duplicate parts are counted separately.
 Internal divider counts represent logical folds: straight segments on the same
 supporting line count once, including dashed or retraced lines. Parallel offset

@@ -1,10 +1,5 @@
 {
-  "no_parts": 0,
-  "parts": [
-    {
-      "external_geometry": 0,
-      "internal_geometry": 0,
-      "internal_dividers": 0
-    }
-  ]
+  "parts": [],
+  "needs_review": true,
+  "review_reason": "Expected geometry counts have not been reviewed."
 }

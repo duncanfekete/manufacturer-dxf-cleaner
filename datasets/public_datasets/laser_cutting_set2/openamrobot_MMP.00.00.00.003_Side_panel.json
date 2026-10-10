@@ -1,5 +1,4 @@
 {
-  "no_parts": 0,
   "parts": [],
   "needs_review": true,
   "review_reason": "All geometry is on layer 0; confirm which open internal lines are cut features versus construction or bend marks before setting divider counts."
