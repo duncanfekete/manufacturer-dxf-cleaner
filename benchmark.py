@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ezdxf import DXFError
 
-from process_dxf import PartGeometry, process_dxf_file
+from process_dxf import DXFProcessingError, PartGeometry, process_dxf_file
 
 class DXFRegistry:
     def __init__(self, root_directory: str | None = None) -> None:
@@ -29,11 +29,13 @@ class DXFRegistry:
         for dxf in self.registry:
             try:
                 dxf.resolve_dxf()
-            except (OSError, ValueError, DXFError) as error:
+            except (OSError, ValueError, DXFError, DXFProcessingError) as error:
                 dxf.error = f"{type(error).__name__}: {error}"
             self.results.append(dxf.model_copy(deep=True))
 
         for dxf in self.results:
+            if dxf.passed:
+                continue
             print(f"DXF: {dxf.root_directory}")
             if dxf.needs_review:
                 print(f"Needs Review: {dxf.review_reason}")
@@ -41,7 +43,7 @@ class DXFRegistry:
                 print(f"Error: {dxf.error}")
             print(f"Expected Parts: {dxf.expected_parts}, Resolved Parts: {dxf.resolved_parts}")
 
-        print(f"Total Passed: {self.pass_count} out of {self.total_count}")
+        print(f"Total Failed: {self.fail_count} out of {self.total_count}")
 
     def dump_results(self, file_path: str | Path) -> None:
         output_path = Path(file_path)

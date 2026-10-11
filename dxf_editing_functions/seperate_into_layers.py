@@ -4,6 +4,8 @@ import re
 from ezdxf import edgesmith, path
 from ezdxf.document import Drawing
 from shapely.geometry import LineString, Polygon
+from shapely import make_valid
+from shapely.validation import explain_validity
 
 
 def separate_layers(
@@ -29,7 +31,9 @@ def separate_layers(
     are dividers. Containment permits touching, but not crossing, the boundary.
     Curves are approximated for classification using max_sagitta in drawing
     units; area_tol is in squared drawing units. DXF geometry is not changed.
-    Invalid positive-area polygons raise ValueError before layers are changed.
+    Invalid positive-area polygons are repaired for classification only when
+    repair produces exactly one positive-area polygon; ambiguous repairs raise
+    ValueError before layers are changed. Source geometry is not modified.
     Explicit etch/engraving layers retain their source layers and are not cuts or dividers.
     Other entities and uncontained contours retain their original layers.
     Layers referenced by other entities, blocks, or layouts are retained.
@@ -57,13 +61,33 @@ def separate_layers(
         if not all(math.isfinite(value) for vertex in vertices for value in vertex):
             raise ValueError(f"Non-finite coordinates in contour {entity.dxf.handle}")
 
+        is_closed = entity.dxftype() == "CIRCLE" or getattr(
+            entity, "closed", getattr(entity, "is_closed", False)
+        )
+        if is_closed and vertices[0] != vertices[-1]:
+            vertices.append(vertices[0])
+
         geometry = LineString(vertices)
         contour_area = 0.0
-        if len(vertices) >= 4 and vertices[0] == vertices[-1]:
+        if is_closed and len(vertices) >= 4:
             polygon = Polygon(vertices)
             if polygon.area > area_tol:
                 if not polygon.is_valid:
-                    raise ValueError(f"Invalid polygon in contour {entity.dxf.handle}")
+                    repaired = make_valid(polygon)
+                    polygons = (
+                        [repaired]
+                        if isinstance(repaired, Polygon)
+                        else [part for part in repaired.geoms if isinstance(part, Polygon)]
+                    )
+                    polygons = [part for part in polygons if part.area > area_tol]
+                    if len(polygons) != 1:
+                        raise ValueError(
+                            f"Invalid polygon in contour {entity.dxf.handle} "
+                            f"({entity.dxftype()} on layer {entity.dxf.layer!r}): "
+                            f"{explain_validity(polygon)}; repair produced "
+                            f"{len(polygons)} positive-area polygons"
+                        )
+                    polygon = polygons[0]
                 geometry = polygon
                 contour_area = polygon.area
         contours.append((entity, geometry, contour_area))
@@ -112,17 +136,28 @@ def separate_layers(
     return doc
 
 
-def count_internal_dividers(doc: Drawing, *, linear_tol: float = 1e-6) -> int:
-    """Count collinear straight divider segments as one fold, preserving DXF entities.
+def count_internal_dividers(
+    doc: Drawing,
+    *,
+    linear_tol: float = 1e-6,
+    merge_gap_tol: float = 0.01,
+) -> int:
+    """Count connected straight dividers and regular dashed folds logically.
 
-    Gaps along the same supporting line do not create additional dividers.
-    Parallel offset lines and non-straight paths count separately. linear_tol
-    is the allowed perpendicular deviation in drawing units.
+    Collinear fragments merge when they touch or are within merge_gap_tol.
+    Repeated, evenly spaced dash patterns on the same supporting line count as
+    one fold. Separated, irregular spans on that line count independently.
+    Parallel offset lines and non-straight paths count separately. Tolerances
+    are in drawing units.
     """
     if not math.isfinite(linear_tol) or linear_tol <= 0:
         raise ValueError("linear_tol must be finite and positive")
+    if not math.isfinite(merge_gap_tol) or merge_gap_tol < 0:
+        raise ValueError("merge_gap_tol must be finite and non-negative")
 
-    straight_dividers: list[tuple[float, float, float, float]] = []
+    straight_dividers: list[
+        tuple[float, float, float, float, list[tuple[float, float]]]
+    ] = []
     other_count = 0
     for entity in doc.modelspace().query(
         'LINE LWPOLYLINE POLYLINE CIRCLE[layer=="INTERNAL_DIVIDERS"]'
@@ -152,14 +187,74 @@ def count_internal_dividers(doc: Drawing, *, linear_tol: float = 1e-6) -> int:
         ):
             other_count += 1
             continue
-        if not any(
-            abs(direction_x * carrier_y - direction_y * carrier_x) <= 1e-9
-            and all(
-                abs(carrier_x * (vertex_y - anchor_y) - carrier_y * (vertex_x - anchor_x))
-                <= linear_tol
+        matching_group = next(
+            (
+                group
+                for group in straight_dividers
+                if abs(direction_x * group[3] - direction_y * group[2]) <= 1e-9
+                and all(
+                    abs(group[2] * (vertex_y - group[1]) - group[3] * (vertex_x - group[0]))
+                    <= linear_tol
+                    for vertex_x, vertex_y in vertices
+                )
+            ),
+            None,
+        )
+        if matching_group is None:
+            projections = [
+                direction_x * (vertex_x - origin_x)
+                + direction_y * (vertex_y - origin_y)
                 for vertex_x, vertex_y in vertices
+            ]
+            straight_dividers.append((
+                origin_x,
+                origin_y,
+                direction_x,
+                direction_y,
+                [(min(projections), max(projections))],
+            ))
+        else:
+            anchor_x, anchor_y, carrier_x, carrier_y, intervals = matching_group
+            projections = [
+                carrier_x * (vertex_x - anchor_x)
+                + carrier_y * (vertex_y - anchor_y)
+                for vertex_x, vertex_y in vertices
+            ]
+            intervals.append((min(projections), max(projections)))
+
+    logical_count = 0
+    for _, _, _, _, intervals in straight_dividers:
+        merged_intervals: list[tuple[float, float]] = []
+        for interval_start, interval_end in sorted(intervals):
+            if (
+                merged_intervals
+                and interval_start - merged_intervals[-1][1] <= merge_gap_tol
+            ):
+                previous_start, previous_end = merged_intervals[-1]
+                merged_intervals[-1] = (
+                    previous_start,
+                    max(previous_end, interval_end),
+                )
+            else:
+                merged_intervals.append((interval_start, interval_end))
+
+        if len(merged_intervals) >= 3:
+            lengths = [end - start for start, end in merged_intervals]
+            gaps = [
+                next_start - end
+                for (_, end), (next_start, _) in zip(
+                    merged_intervals, merged_intervals[1:]
+                )
+            ]
+            mean_length = sum(lengths) / len(lengths)
+            mean_gap = sum(gaps) / len(gaps)
+            is_regular_dash_pattern = (
+                max(lengths) - min(lengths) <= max(mean_length * 0.1, linear_tol)
+                and max(gaps) - min(gaps) <= max(mean_gap * 0.1, linear_tol)
             )
-            for anchor_x, anchor_y, carrier_x, carrier_y in straight_dividers
-        ):
-            straight_dividers.append((origin_x, origin_y, direction_x, direction_y))
-    return len(straight_dividers) + other_count
+        else:
+            is_regular_dash_pattern = False
+
+        logical_count += 1 if is_regular_dash_pattern else len(merged_intervals)
+
+    return logical_count + other_count

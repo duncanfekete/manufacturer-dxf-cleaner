@@ -3,6 +3,7 @@ from collections import defaultdict
 
 from ezdxf import edgeminer, edgesmith
 from ezdxf.document import Drawing
+from ezdxf.lldxf.const import DXF2000
 
 
 STYLE_ATTRIBUTES = (
@@ -69,8 +70,18 @@ def join_edges(
             )
             polyline.closed = edgeminer.is_loop(chain, gap_tol=gap_tol)
 
+            # R12 cannot serialize LWPOLYLINE; retain bulges in a classic polyline.
+            if doc.dxfversion < DXF2000:
+                modelspace.add_polyline2d(
+                    polyline.get_points("xyseb"),
+                    format="xyseb",
+                    close=polyline.closed,
+                    dxfattribs=attributes,
+                )
+            else:
+                modelspace.add_entity(polyline)
+
             # Step 5: Replace only the source entities belonging to this chain.
-            modelspace.add_entity(polyline)
             for edge in chain:
                 modelspace.delete_entity(edge.payload)
 

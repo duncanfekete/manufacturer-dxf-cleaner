@@ -2,9 +2,11 @@ import ezdxf
 import os
 import shutil
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from io import BytesIO, StringIO
 from pathlib import Path
+from typing import TypeVar
 
 from ezdxf import recover
 from ezdxf.audit import Auditor
@@ -18,6 +20,25 @@ from typing_extensions import TypedDict
 from dxf_editing_functions.group_parts import group_parts
 from dxf_editing_functions.join_edges import join_edges
 from dxf_editing_functions.seperate_into_layers import count_internal_dividers, separate_layers
+
+ResultT = TypeVar("ResultT")
+
+
+class DXFProcessingError(Exception):
+    pass
+
+
+def _run_stage(
+    stage: str,
+    file_path: str | Path,
+    operation: Callable[[], ResultT],
+) -> ResultT:
+    try:
+        return operation()
+    except Exception as error:
+        raise DXFProcessingError(
+            f"{stage} failed for {file_path}: {type(error).__name__}: {error}"
+        ) from error
 
 
 class PartGeometry(TypedDict):
@@ -155,15 +176,23 @@ def organize_layers(file_paths: list[str]) -> DXFProcessingResult:
         output_path = source_path.with_name(
             f"{source_path.stem}_organized{source_path.suffix}"
         )
-        doc = ezdxf.readfile(source_path)
-        separate_layers(doc).saveas(output_path)
+        doc = _run_stage("load split part", source_path, lambda: ezdxf.readfile(source_path))
+        _run_stage(
+            "classify layers and save organized part",
+            source_path,
+            lambda: separate_layers(doc).saveas(output_path),
+        )
         modelspace = doc.modelspace()
-        result.parts.append({
-            "internal_geometry": len(modelspace.query(
-                'LWPOLYLINE POLYLINE CIRCLE[layer=="INTERNAL_GEOMETRY"]'
-            )),
-            "internal_dividers": count_internal_dividers(doc),
-        })
+        result.parts.append(_run_stage(
+            "count organized geometry",
+            source_path,
+            lambda: {
+                "internal_geometry": len(modelspace.query(
+                    'LWPOLYLINE POLYLINE CIRCLE[layer=="INTERNAL_GEOMETRY"]'
+                )),
+                "internal_dividers": count_internal_dividers(doc),
+            },
+        ))
         result.output_paths.append(str(output_path))
     return result
 
@@ -177,7 +206,19 @@ def process_dxf_file(file_path: str) -> DXFProcessingResult:
 
     Returns final processed paths and per-part internal geometry/divider counts.
     """
-    original_file = create_results_directory(file_path)
-    edge_joined_file = join_part_edges(original_file)
-    split_files = split_dxf_parts(edge_joined_file)
+    original_file = _run_stage(
+        "copy source to results",
+        file_path,
+        lambda: create_results_directory(file_path),
+    )
+    edge_joined_file = _run_stage(
+        "join edges",
+        original_file,
+        lambda: join_part_edges(original_file),
+    )
+    split_files = _run_stage(
+        "split drawing into parts",
+        edge_joined_file,
+        lambda: split_dxf_parts(edge_joined_file),
+    )
     return organize_layers(split_files)

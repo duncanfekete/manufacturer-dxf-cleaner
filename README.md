@@ -56,10 +56,11 @@ Expected metadata uses named counts for each part:
 An empty `parts` list means the DXF contains no parts. Each listed part implicitly
 has one external profile, so only internal geometry and divider counts are stored.
 Part order does not affect matching, but duplicate parts are counted separately.
-Internal divider counts represent logical folds: straight segments on the same
-supporting line count once, including dashed or retraced lines. Parallel offset
-lines and non-straight divider paths count separately. The saved DXF retains
-the original segments; counting does not bridge gaps or alter geometry. Layers
+Internal divider counts represent logical folds: touching or nearby collinear
+segments count once, as do regular repeated dash patterns. Separated irregular
+spans on the same line count independently. Parallel offset lines and
+non-straight divider paths count separately. The saved DXF retains the original
+segments; counting does not bridge gaps or alter geometry. Layers
 with explicit `ETCH`, `ETCHING`, `ENGRAVE`, or `ENGRAVING` name tokens retain
 their source layers and are excluded from cut/fold classification.
 Legacy JSON files with aggregate counts must be updated to this format before
@@ -68,8 +69,7 @@ status, processing errors, and total/pass/fail counts. Structurally malformed
 DXFs are retried with ezdxf's recovery reader; successful recovery emits a
 warning because repairs may alter geometry. Files that still cannot be
 processed are recorded as failures without stopping the benchmark or session.
-Use `python cli.py --help` or
-`python cli.py register --help` for command help.
+Run `python -m main --help` to see the accepted root-directory argument.
 
 ## DXF Viewer
 
