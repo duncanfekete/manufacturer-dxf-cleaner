@@ -19,7 +19,7 @@ from typing_extensions import TypedDict
 
 from dxf_editing_functions.group_parts import group_parts
 from dxf_editing_functions.join_edges import join_edges
-from dxf_editing_functions.seperate_into_layers import count_internal_dividers, separate_layers
+from dxf_editing_functions.seperate_into_layers import separate_layers
 
 ResultT = TypeVar("ResultT")
 
@@ -145,8 +145,8 @@ def split_dxf_parts(file_path: str) -> list[str]:
     """
     Receives an edge_joined or original_file dxf file path and splits it into separate parts.
     Each part is saved as a separate DXF file in the same directory as the input file.
-    Contained or overlapping TEXT and MTEXT stay with parts; detached text is
-    saved together in details.dxf.
+    All modelspace TEXT/MTEXT and entities on the TEXT layer are filtered into
+    details.dxf with detected sheet details, not copied into manufacturing parts.
     
     Returns the part paths, or an empty list if the drawing contains no geometry.
     """
@@ -167,8 +167,8 @@ def organize_layers(file_paths: list[str]) -> DXFProcessingResult:
     Receives a list of DXF file paths and creates variants of them with layers organized systematically.
     Each organized DXF is saved in the same directory as the input file with a "_organized" suffix.
     
-    Returns saved paths and named geometry counts for each part. Collinear
-    straight divider segments count as one logical fold, including dashed folds.
+    Returns saved paths and entity counts from each final organized DXF.
+    Divider entities are counted as saved, without additional logical merging.
     """
     result = DXFProcessingResult()
     for file_path in file_paths:
@@ -182,7 +182,11 @@ def organize_layers(file_paths: list[str]) -> DXFProcessingResult:
             source_path,
             lambda: separate_layers(doc).saveas(output_path),
         )
-        modelspace = doc.modelspace()
+        saved_doc = _run_stage(
+            "load organized output for counting", output_path,
+            lambda: ezdxf.readfile(output_path),
+        )
+        modelspace = saved_doc.modelspace()
         result.parts.append(_run_stage(
             "count organized geometry",
             source_path,
@@ -190,7 +194,9 @@ def organize_layers(file_paths: list[str]) -> DXFProcessingResult:
                 "internal_geometry": len(modelspace.query(
                     'LWPOLYLINE POLYLINE CIRCLE[layer=="INTERNAL_GEOMETRY"]'
                 )),
-                "internal_dividers": count_internal_dividers(doc),
+                "internal_dividers": len(modelspace.query(
+                    'LINE LWPOLYLINE POLYLINE CIRCLE[layer=="INTERNAL_DIVIDERS"]'
+                )),
             },
         ))
         result.output_paths.append(str(output_path))

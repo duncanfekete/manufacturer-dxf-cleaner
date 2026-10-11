@@ -43,7 +43,7 @@ class DXFRegistry:
                 print(f"Error: {dxf.error}")
             print(f"Expected Parts: {dxf.expected_parts}, Resolved Parts: {dxf.resolved_parts}")
 
-        print(f"Total Failed: {self.fail_count} out of {self.total_count}")
+        print(f"Total Passed: {self.pass_count} out of {self.total_count}")
 
     def dump_results(self, file_path: str | Path) -> None:
         output_path = Path(file_path)

@@ -4,8 +4,11 @@ import re
 from ezdxf import edgesmith, path
 from ezdxf.document import Drawing
 from shapely.geometry import LineString, Polygon
+from shapely.ops import unary_union
 from shapely import make_valid
 from shapely.validation import explain_validity
+
+from dxf_editing_functions.join_edges import STYLE_ATTRIBUTES
 
 
 def separate_layers(
@@ -28,16 +31,24 @@ def separate_layers(
     Processes one part's flat XY modelspace lines, polylines and circles in place and returns the
     same Drawing without file I/O. The largest valid closed contour is the
     external boundary. Lines, open polylines and closed contours with area <= area_tol
-    are dividers. Containment permits touching, but not crossing, the boundary.
+    are dividers. LINE divider containment allows a 1e-6 drawing-unit margin;
+    explicit BEND axes allow max_sagitta. BEND_EXTENT paths are removed from
+    the supported contour types; other contours require strict coverage.
+    Upright zero-thickness BEND LINEs with finite endpoint Z within 1e-6 are
+    normalized to Z=0 before eligibility checks, without changing XY coordinates.
     Curves are approximated for classification using max_sagitta in drawing
-    units; area_tol is in squared drawing units. DXF geometry is not changed.
-    Invalid positive-area polygons are repaired for classification only when
-    repair produces exactly one positive-area polygon; ambiguous repairs raise
-    ValueError before layers are changed. Source geometry is not modified.
+    units; area_tol is in squared drawing units. Classified parallel LINE dividers
+    with matching styles collapse within 10% of the shorter span's length,
+    except explicit BEND axes, which remain independent.
+    Odd groups retain their middle line; even groups center the middle pair.
+    Invalid positive-area polygons are repaired for classification only using
+    their positive-area polygonal components. Repairs without polygonal area
+    raise ValueError before layers are changed. Polygon repairs do not modify source geometry.
     Explicit etch/engraving layers retain their source layers and are not cuts or dividers.
     Other entities and uncontained contours retain their original layers.
     Layers referenced by other entities, blocks, or layouts are retained.
-    If there is no positive-area closed contour, the drawing is unchanged.
+    If there is no positive-area closed contour, no classification occurs;
+    supported BEND_EXTENT paths are still removed.
     """
     if not math.isfinite(max_sagitta) or max_sagitta <= 0:
         raise ValueError("max_sagitta must be finite and positive")
@@ -46,7 +57,20 @@ def separate_layers(
 
     # Step 1: Approximate eligible contours and select the largest closed boundary.
     contours = []
+    bend_handles = set()
     for entity in doc.modelspace().query("LINE LWPOLYLINE POLYLINE CIRCLE"):
+        if entity.dxf.layer.upper() == "BEND_EXTENT":
+            doc.modelspace().delete_entity(entity)
+            continue
+        if entity.dxf.layer.upper() == "BEND":
+            bend_handles.add(entity.dxf.handle)
+            if (entity.dxftype() == "LINE"
+                and entity.dxf.get("extrusion", (0, 0, 1)) == (0, 0, 1)
+                and entity.dxf.get("thickness", 0) == 0
+                and all(math.isfinite(vertex.z) and abs(vertex.z) <= 1e-6
+                    for vertex in (entity.dxf.start, entity.dxf.end))):
+                entity.dxf.start = (entity.dxf.start.x, entity.dxf.start.y, 0)
+                entity.dxf.end = (entity.dxf.end.x, entity.dxf.end.y, 0)
         layer_tokens = re.split(r"[\W_]+", entity.dxf.layer.upper())
         if {"ETCH", "ETCHING", "ENGRAVE", "ENGRAVING"}.intersection(layer_tokens):
             continue
@@ -80,14 +104,14 @@ def separate_layers(
                         else [part for part in repaired.geoms if isinstance(part, Polygon)]
                     )
                     polygons = [part for part in polygons if part.area > area_tol]
-                    if len(polygons) != 1:
+                    if not polygons:
                         raise ValueError(
                             f"Invalid polygon in contour {entity.dxf.handle} "
                             f"({entity.dxftype()} on layer {entity.dxf.layer!r}): "
                             f"{explain_validity(polygon)}; repair produced "
-                            f"{len(polygons)} positive-area polygons"
+                            "no positive-area polygons"
                         )
-                    polygon = polygons[0]
+                    polygon = unary_union(polygons)
                 geometry = polygon
                 contour_area = polygon.area
         contours.append((entity, geometry, contour_area))
@@ -104,23 +128,60 @@ def separate_layers(
             doc.layers.new(name)
     external_entity.dxf.layer = "EXTERNAL_GEOMETRY"
 
-    # Step 2: Move contained positive-area contours, testing their entire geometry.
+    # Step 2: Classify contained contours by area, testing their entire geometry.
+    divider_boundary = external_polygon.buffer(1e-6)
+    bend_boundary = external_polygon.buffer(max_sagitta)
     for entity, geometry, contour_area in contours:
-        if entity is external_entity or contour_area <= area_tol:
+        boundary = divider_boundary if entity.dxftype() == "LINE" else external_polygon
+        if entity.dxf.handle in bend_handles:
+            boundary = bend_boundary
+        if entity is external_entity or not boundary.covers(geometry):
             continue
-        if external_polygon.covers(geometry):
-            entity.dxf.layer = "INTERNAL_GEOMETRY"
+        entity.dxf.layer = (
+            "INTERNAL_GEOMETRY" if contour_area > area_tol else "INTERNAL_DIVIDERS"
+        )
 
-    # Step 3: Move contained open or zero-area contours to the divider layer.
-    for entity, geometry, contour_area in contours:
-        if contour_area <= area_tol and external_polygon.covers(geometry):
-            entity.dxf.layer = "INTERNAL_DIVIDERS"
+    divider_groups = []
+    for entity, geometry, _ in contours:
+        if (entity.dxftype() != "LINE" or entity.dxf.layer != "INTERNAL_DIVIDERS"
+            or entity.dxf.handle in bend_handles
+            or not geometry.length or not divider_boundary.covers(geometry)):
+            continue
+        direction = (entity.dxf.end - entity.dxf.start).normalize()
+        style = tuple(entity.dxf.get(name) for name in STYLE_ATTRIBUTES)
+        group = next((group for group in divider_groups if all(
+            style == other_style and abs(direction.cross(other_direction).z) <= 1e-9
+            and geometry.hausdorff_distance(other_geometry) <= 0.1 * min(geometry.length, other_geometry.length)
+            for _, other_geometry, other_direction, other_style in group
+        )), None)
+        if group is None:
+            group = []
+            divider_groups.append(group)
+        group.append((entity, geometry, direction, style))
+    for group in divider_groups:
+        direction = group[0][2]
+        group.sort(key=lambda item: -direction.y * item[0].dxf.start.x + direction.x * item[0].dxf.start.y)
+        retained = group[len(group) // 2][0]
+        if len(group) % 2 == 0:
+            if not divider_boundary.covers(unary_union([item[1] for item in group]).convex_hull):
+                continue
+            other = group[len(group) // 2 - 1][0]
+            start, end = other.dxf.start, other.dxf.end
+            if (retained.dxf.end - retained.dxf.start).dot(end - start) < 0:
+                start, end = end, start
+            start, end = retained.dxf.start.lerp(start), retained.dxf.end.lerp(end)
+            if not divider_boundary.covers(LineString([(start.x, start.y), (end.x, end.y)])):
+                continue
+            retained.dxf.start, retained.dxf.end = start, end
+        for entity, _, _, _ in group:
+            if entity is not retained:
+                doc.modelspace().delete_entity(entity)
 
-    # Step 4: Normalize the annotation layer regardless of its source name.
+    # Step 3: Normalize the annotation layer regardless of its source name.
     for entity in doc.modelspace().query("TEXT MTEXT"):
         entity.dxf.layer = "TEXT"
 
-    # Step 5: Remove unused layers without breaking block or layout references.
+    # Step 4: Remove unused layers without breaking block or layout references.
     used_layers = {
         entity.dxf.layer.casefold()
         for entity in doc.entitydb.values()
@@ -134,127 +195,3 @@ def separate_layers(
         doc.header["$CLAYER"] = "0"
 
     return doc
-
-
-def count_internal_dividers(
-    doc: Drawing,
-    *,
-    linear_tol: float = 1e-6,
-    merge_gap_tol: float = 0.01,
-) -> int:
-    """Count connected straight dividers and regular dashed folds logically.
-
-    Collinear fragments merge when they touch or are within merge_gap_tol.
-    Repeated, evenly spaced dash patterns on the same supporting line count as
-    one fold. Separated, irregular spans on that line count independently.
-    Parallel offset lines and non-straight paths count separately. Tolerances
-    are in drawing units.
-    """
-    if not math.isfinite(linear_tol) or linear_tol <= 0:
-        raise ValueError("linear_tol must be finite and positive")
-    if not math.isfinite(merge_gap_tol) or merge_gap_tol < 0:
-        raise ValueError("merge_gap_tol must be finite and non-negative")
-
-    straight_dividers: list[
-        tuple[float, float, float, float, list[tuple[float, float]]]
-    ] = []
-    other_count = 0
-    for entity in doc.modelspace().query(
-        'LINE LWPOLYLINE POLYLINE CIRCLE[layer=="INTERNAL_DIVIDERS"]'
-    ):
-        vertices = [
-            (vertex.x, vertex.y)
-            for vertex in path.make_path(entity).flattening(0.01)
-        ]
-        if len(vertices) < 2:
-            other_count += 1
-            continue
-        origin_x, origin_y = vertices[0]
-        end_x, end_y = max(
-            vertices,
-            key=lambda vertex: math.hypot(vertex[0] - origin_x, vertex[1] - origin_y),
-        )
-        length = math.hypot(end_x - origin_x, end_y - origin_y)
-        if length <= linear_tol:
-            other_count += 1
-            continue
-        direction_x = (end_x - origin_x) / length
-        direction_y = (end_y - origin_y) / length
-        if any(
-            abs(direction_x * (vertex_y - origin_y) - direction_y * (vertex_x - origin_x))
-            > linear_tol
-            for vertex_x, vertex_y in vertices
-        ):
-            other_count += 1
-            continue
-        matching_group = next(
-            (
-                group
-                for group in straight_dividers
-                if abs(direction_x * group[3] - direction_y * group[2]) <= 1e-9
-                and all(
-                    abs(group[2] * (vertex_y - group[1]) - group[3] * (vertex_x - group[0]))
-                    <= linear_tol
-                    for vertex_x, vertex_y in vertices
-                )
-            ),
-            None,
-        )
-        if matching_group is None:
-            projections = [
-                direction_x * (vertex_x - origin_x)
-                + direction_y * (vertex_y - origin_y)
-                for vertex_x, vertex_y in vertices
-            ]
-            straight_dividers.append((
-                origin_x,
-                origin_y,
-                direction_x,
-                direction_y,
-                [(min(projections), max(projections))],
-            ))
-        else:
-            anchor_x, anchor_y, carrier_x, carrier_y, intervals = matching_group
-            projections = [
-                carrier_x * (vertex_x - anchor_x)
-                + carrier_y * (vertex_y - anchor_y)
-                for vertex_x, vertex_y in vertices
-            ]
-            intervals.append((min(projections), max(projections)))
-
-    logical_count = 0
-    for _, _, _, _, intervals in straight_dividers:
-        merged_intervals: list[tuple[float, float]] = []
-        for interval_start, interval_end in sorted(intervals):
-            if (
-                merged_intervals
-                and interval_start - merged_intervals[-1][1] <= merge_gap_tol
-            ):
-                previous_start, previous_end = merged_intervals[-1]
-                merged_intervals[-1] = (
-                    previous_start,
-                    max(previous_end, interval_end),
-                )
-            else:
-                merged_intervals.append((interval_start, interval_end))
-
-        if len(merged_intervals) >= 3:
-            lengths = [end - start for start, end in merged_intervals]
-            gaps = [
-                next_start - end
-                for (_, end), (next_start, _) in zip(
-                    merged_intervals, merged_intervals[1:]
-                )
-            ]
-            mean_length = sum(lengths) / len(lengths)
-            mean_gap = sum(gaps) / len(gaps)
-            is_regular_dash_pattern = (
-                max(lengths) - min(lengths) <= max(mean_length * 0.1, linear_tol)
-                and max(gaps) - min(gaps) <= max(mean_gap * 0.1, linear_tol)
-            )
-        else:
-            is_regular_dash_pattern = False
-
-        logical_count += 1 if is_regular_dash_pattern else len(merged_intervals)
-
-    return logical_count + other_count
