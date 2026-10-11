@@ -1,0 +1,36 @@
+{
+  "parts": [
+    {
+      "internal_geometry": 20,
+      "internal_dividers": 0
+    },
+    {
+      "internal_geometry": 20,
+      "internal_dividers": 0
+    },
+    {
+      "internal_geometry": 20,
+      "internal_dividers": 0
+    },
+    {
+      "internal_geometry": 20,
+      "internal_dividers": 0
+    },
+    {
+      "internal_geometry": 17,
+      "internal_dividers": 0
+    },
+    {
+      "internal_geometry": 17,
+      "internal_dividers": 0
+    },
+    {
+      "internal_geometry": 17,
+      "internal_dividers": 0
+    },
+    {
+      "internal_geometry": 17,
+      "internal_dividers": 0
+    }
+  ]
+}

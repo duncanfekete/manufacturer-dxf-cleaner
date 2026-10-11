@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ezdxf import DXFError
 
-from process_dxf import DXFProcessingError, PartGeometry, process_dxf_file
+from benchmark.process_dxf import DXFProcessingError, PartGeometry, process_dxf_file
 
 class DXFRegistry:
     def __init__(self, root_directory: str | None = None) -> None:

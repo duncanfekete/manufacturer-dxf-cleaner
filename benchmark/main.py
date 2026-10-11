@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from benchmark import DXFRegistry
+from benchmark.benchmark import DXFRegistry
 
 
 def main() -> int:
