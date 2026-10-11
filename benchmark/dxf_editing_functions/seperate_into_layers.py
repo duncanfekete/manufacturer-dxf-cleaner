@@ -8,7 +8,7 @@ from shapely.ops import unary_union
 from shapely import make_valid
 from shapely.validation import explain_validity
 
-from dxf_editing_functions.join_edges import STYLE_ATTRIBUTES
+from .join_edges import STYLE_ATTRIBUTES
 
 
 def separate_layers(
