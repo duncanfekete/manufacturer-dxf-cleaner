@@ -1,38 +1,20 @@
+import argparse
 from pathlib import Path
 
-from process_dxf import process_dxf_file
+from benchmark import DXFRegistry
 
 
-def main() -> None:
-	test_directory = Path(__file__).resolve().parent / "datasets" / "public_datasets" / "test"
-	if not test_directory.is_dir():
-		raise FileNotFoundError(f"Test directory not found: {test_directory}")
+def main() -> int:
+	parser = argparse.ArgumentParser(description="Benchmark every DXF under a directory.")
+	parser.add_argument("root_directory", type=Path, help="Directory containing DXFs and expected JSON files")
+	arguments = parser.parse_args()
+	if not arguments.root_directory.is_dir():
+		parser.error(f"not a directory: {arguments.root_directory}")
 
-	file_paths = sorted(
-		path
-		for path in test_directory.rglob("*")
-		if path.is_file() and path.suffix.lower() == ".dxf"
-	)
-	if not file_paths:
-		print(f"No DXF files found in {test_directory}")
-		return
-
-	failed_files = []
-	for file_path in file_paths:
-		print(f"Processing {file_path.relative_to(test_directory)}")
-		try:
-			result = process_dxf_file(str(file_path))
-		except Exception as error:
-			print(f"Failed: {file_path.name}: {error}")
-			failed_files.append(file_path)
-			continue
-		for output_path in result.output_paths:
-			print(f"Saved: {output_path}")
-
-	print(f"Processed {len(file_paths) - len(failed_files)}/{len(file_paths)} DXF files")
-	if failed_files:
-		raise SystemExit(1)
+	registry = DXFRegistry(str(arguments.root_directory.resolve()))
+	registry.run_benchmark()
+	return int(registry.fail_count > 0)
 
 
 if __name__ == "__main__":
-	main()
+	raise SystemExit(main())

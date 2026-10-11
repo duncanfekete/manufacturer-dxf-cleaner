@@ -27,38 +27,18 @@ Arcs retain their bulges; splines and non-circular ellipses are approximated usi
 `max_sagitta` (default `0.01` drawing units). Replacement polylines retain the listed
 display attributes, but not source handles, XDATA, or other entity-specific metadata.
 
-## Benchmark CLI
+## Benchmark
 
-Install dependencies with `python -m pip install -r requirements.txt`, then start
-an interactive session:
-
-```sh
-python -m cli
-```
-
-At the `dxf>` prompt, enter commands separately:
-
-```text
-register datasets/public_datasets/test
-run
-dump results/benchmarks
-exit_session
-```
-
-The registry stays in memory until `exit_session`, Ctrl-D, or Ctrl-C closes the
-session. Quote directory paths containing spaces. Command errors leave the
-session running. Chained one-shot commands are also supported:
+Install dependencies with `python -m pip install -r requirements.txt`, then pass
+the dataset root directory to the benchmark:
 
 ```sh
-python cli.py register datasets/public_datasets/test run dump results/benchmarks
+python -m main datasets/public_datasets/laser_cutting_set
 ```
 
-`register DIRECTORY` recursively loads DXFs and their adjacent JSON metadata.
-Multiple `register` commands can precede `run`. `run` benchmarks the in-memory
-registry, and `dump DIRECTORY` writes `benchmark.json`, creating the output
-directory if needed and replacing an existing report. Separate CLI processes do
-not retain the registry. Registering more files after a run clears its results,
-so run again before exporting.
+The benchmark recursively finds DXFs under the provided directory and loads each
+adjacent JSON file. Quote the directory path if it contains spaces. The process
+returns a non-zero exit code when any entry fails or needs review.
 
 Expected metadata uses named counts for each part:
 
