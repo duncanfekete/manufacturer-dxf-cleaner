@@ -11,21 +11,19 @@ processing behaviour is documented in [Rules.md](Rules.md).
 
 ## Setup
 
-From the repository root, install the Python dependencies, then enter the
-benchmark directory:
+From the repository root, install the Python dependencies:
 
 ```sh
 python -m pip install -r requirements.txt
-cd benchmark
 ```
 
-The Python examples and benchmark commands below run from `benchmark/`.
+Run the Python examples and benchmark commands from the repository root.
 
 ## Joining Small Gaps
 
 ```python
 import ezdxf
-from dxf_editing_functions.join_edges import join_edges
+from benchmark.dxf_editing_functions.join_edges import join_edges
 
 doc = ezdxf.readfile("part.dxf")
 doc = join_edges(doc, gap_tol=0.01)
@@ -52,7 +50,7 @@ display attributes, but not source handles, XDATA, or other entity-specific meta
 Pass the dataset root directory to the benchmark:
 
 ```sh
-python -m main datasets/public_datasets/laser_cutting_set
+python -m benchmark benchmark/datasets/public_datasets/laser_cutting_set
 ```
 
 The benchmark recursively finds DXFs under the provided directory and loads each
@@ -87,7 +85,7 @@ status, processing errors, and total/pass/fail counts. Structurally malformed
 DXFs are retried with ezdxf's recovery reader; successful recovery emits a
 warning because repairs may alter geometry. Files that still cannot be
 processed are recorded as failures without stopping the benchmark or session.
-Run `python -m main --help` to see the accepted root-directory argument.
+Run `python -m benchmark --help` to see the accepted root-directory argument.
 
 ## Results
 

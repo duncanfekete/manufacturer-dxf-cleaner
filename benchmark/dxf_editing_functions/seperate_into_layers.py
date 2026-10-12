@@ -10,12 +10,20 @@ from shapely.validation import explain_validity
 
 from .join_edges import STYLE_ATTRIBUTES
 
+DIVIDER_AXIS_TOL = 1e-6
+DIVIDER_GAP_MIN_RATIO = 0.1
+DIVIDER_GAP_MAX_RATIO = 0.5
+
 
 def separate_layers(
     doc: Drawing,
     *,
     max_sagitta: float = 0.01,
     area_tol: float = 1e-9,
+    external_geometry_layer: str = "EXTERNAL_GEOMETRY",
+    internal_geometry_layer: str = "INTERNAL_GEOMETRY",
+    internal_dividers_layer: str = "INTERNAL_DIVIDERS",
+    group_external_and_internal_geometry_layers: bool = False,
 ) -> Drawing:
     """
     Separate layers into logical grouping based on geometry: external geometry, internal geometries, internal dividers.
@@ -28,6 +36,11 @@ def separate_layers(
     4. Move TEXT and MTEXT to the text layer.
     5. Remove unused source layers, retaining the required layer 0.
 
+    Layer names are configurable and default to EXTERNAL_GEOMETRY,
+    INTERNAL_GEOMETRY and INTERNAL_DIVIDERS. When
+    group_external_and_internal_geometry_layers is True, both the external
+    contour and contained positive-area contours use external_geometry_layer;
+    dividers continue to use internal_dividers_layer.
     Processes one part's flat XY modelspace lines, polylines and circles in place and returns the
     same Drawing without file I/O. The largest valid closed contour is the
     external boundary. Lines, open polylines and closed contours with area <= area_tol
@@ -39,7 +52,9 @@ def separate_layers(
     Curves are approximated for classification using max_sagitta in drawing
     units; area_tol is in squared drawing units. Classified parallel LINE dividers
     with matching styles collapse within 10% of the shorter span's length,
-    except explicit BEND axes, which remain independent.
+    except explicit BEND axes, which remain independent. Same-axis divider
+    segments with matching styles join when their positive gap is 10%-50% of
+    the shorter segment length and the joined line stays inside the exterior.
     Odd groups retain their middle line; even groups center the middle pair.
     Invalid positive-area polygons are repaired for classification only using
     their positive-area polygonal components. Repairs without polygonal area
@@ -121,12 +136,18 @@ def separate_layers(
         return doc
     external_entity, external_polygon, _ = max(boundaries, key=lambda contour: contour[2])
     organized_layers = {
-        "0", "TEXT", "EXTERNAL_GEOMETRY", "INTERNAL_GEOMETRY", "INTERNAL_DIVIDERS"
+        "0", "TEXT", external_geometry_layer, internal_geometry_layer,
+        internal_dividers_layer,
     }
     for name in sorted(organized_layers):
         if name not in doc.layers:
             doc.layers.new(name)
-    external_entity.dxf.layer = "EXTERNAL_GEOMETRY"
+    external_entity.dxf.layer = external_geometry_layer
+    contained_geometry_layer = (
+        external_geometry_layer
+        if group_external_and_internal_geometry_layers
+        else internal_geometry_layer
+    )
 
     # Step 2: Classify contained contours by area, testing their entire geometry.
     divider_boundary = external_polygon.buffer(1e-6)
@@ -138,12 +159,12 @@ def separate_layers(
         if entity is external_entity or not boundary.covers(geometry):
             continue
         entity.dxf.layer = (
-            "INTERNAL_GEOMETRY" if contour_area > area_tol else "INTERNAL_DIVIDERS"
+            contained_geometry_layer if contour_area > area_tol else internal_dividers_layer
         )
 
     divider_groups = []
     for entity, geometry, _ in contours:
-        if (entity.dxftype() != "LINE" or entity.dxf.layer != "INTERNAL_DIVIDERS"
+        if (entity.dxftype() != "LINE" or entity.dxf.layer != internal_dividers_layer
             or entity.dxf.handle in bend_handles
             or not geometry.length or not divider_boundary.covers(geometry)):
             continue
@@ -176,6 +197,107 @@ def separate_layers(
         for entity, _, _, _ in group:
             if entity is not retained:
                 doc.modelspace().delete_entity(entity)
+
+    axis_groups = []
+    for entity, geometry, _ in contours:
+        if (
+            not entity.is_alive
+            or entity.dxftype() != "LINE"
+            or entity.dxf.layer != "INTERNAL_DIVIDERS"
+            or not geometry.length
+        ):
+            continue
+        start, end = entity.dxf.start, entity.dxf.end
+        direction = (end - start).normalize()
+        if direction.x < 0 or (abs(direction.x) <= 1e-12 and direction.y < 0):
+            direction = -direction
+        style = tuple(entity.dxf.get(name) for name in STYLE_ATTRIBUTES)
+        axis_group = next((group for group in axis_groups if (
+            style == group[0][3]
+            and abs(direction.cross(group[0][2]).z) <= 1e-9
+            and all(
+                abs((point - group[0][0].dxf.start).cross(group[0][2]).z)
+                <= DIVIDER_AXIS_TOL
+                for point in (start, end)
+            )
+        )), None)
+        if axis_group is None:
+            axis_group = []
+            axis_groups.append(axis_group)
+        axis_group.append((entity, geometry, direction, style))
+
+    internal_geometry = [
+        geometry
+        for entity, geometry, contour_area in contours
+        if entity.is_alive
+        and entity.dxf.layer == "INTERNAL_GEOMETRY"
+        and contour_area > area_tol
+    ]
+    for axis_group in axis_groups:
+        axis_direction = axis_group[0][2]
+        axis_origin = axis_group[0][0].dxf.start
+        segments = []
+        for item in axis_group:
+            entity = item[0]
+            endpoints = (entity.dxf.start, entity.dxf.end)
+            projections = [
+                (point.x - axis_origin.x) * axis_direction.x
+                + (point.y - axis_origin.y) * axis_direction.y
+                for point in endpoints
+            ]
+            if projections[0] <= projections[1]:
+                low_point, high_point = endpoints
+                low, high = projections
+            else:
+                low_point, high_point = endpoints[1], endpoints[0]
+                low, high = projections[1], projections[0]
+            segments.append((low, high, low_point, high_point, item))
+        segments.sort(key=lambda segment: segment[0])
+
+        component = []
+        component_end = 0.0
+        previous_length = 0.0
+
+        def join_component() -> None:
+            if len(component) < 2:
+                return
+            joined_start = component[0][2]
+            joined_end = component[-1][3]
+            joined_geometry = LineString([
+                (joined_start.x, joined_start.y),
+                (joined_end.x, joined_end.y),
+            ])
+            if (
+                not divider_boundary.covers(joined_geometry)
+                or any(joined_geometry.intersects(obstacle) for obstacle in internal_geometry)
+            ):
+                return
+            retained = component[0][4][0]
+            retained.dxf.start = joined_start
+            retained.dxf.end = joined_end
+            for segment in component[1:]:
+                doc.modelspace().delete_entity(segment[4][0])
+
+        for segment in segments:
+            low, high, _, _, item = segment
+            segment_length = item[1].length
+            if not component:
+                component = [segment]
+                component_end = high
+                previous_length = segment_length
+                continue
+            gap = low - component_end
+            gap_ratio = gap / min(previous_length, segment_length)
+            if DIVIDER_GAP_MIN_RATIO <= gap_ratio <= DIVIDER_GAP_MAX_RATIO:
+                component.append(segment)
+                component_end = max(component_end, high)
+                previous_length = segment_length
+                continue
+            join_component()
+            component = [segment]
+            component_end = high
+            previous_length = segment_length
+        join_component()
 
     # Step 3: Normalize the annotation layer regardless of its source name.
     for entity in doc.modelspace().query("TEXT MTEXT"):

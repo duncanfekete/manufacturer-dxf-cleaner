@@ -21,6 +21,7 @@ dependent resources into new drawings without modifying its input.
 The orchestration layer owns loading, recovery, saving and stage-specific errors.
 
 Implementation: [process_dxf.py](process_dxf.py).
+Run the benchmark from the repository root with `python -m benchmark`.
 
 ## 2. Units, tolerances and dimensionality
 
@@ -168,19 +169,24 @@ Implementation for sections 4-5:
    use Shapely make_valid, retain direct positive-area Polygon components above the
    area tolerance, and union them for classification. Multiple regions are allowed;
    the source DXF contour remains one entity. Raise if repair has no qualifying polygon.
-4. Select the largest positive-area candidate as EXTERNAL_GEOMETRY. If no candidate
-   exists, return without classification; extent cleanup still applies. This
-   is not currently an exception.
+4. Select the largest positive-area candidate as `external_geometry_layer`
+   (default `EXTERNAL_GEOMETRY`). If no candidate exists, return without
+   classification; extent cleanup still applies. This is not currently an
+   exception.
 5. Test each other contour's entire geometry against the exterior using covers:
    touching is permitted. LINE dividers use a 1e-6 drawing-unit boundary buffer
    to tolerate endpoint noise. Explicit source BEND entities instead use the
    classification max_sagitta margin (0.01 by default); other contours use
    strict coverage. This containment margin does not relax the separate
    bounded BEND LINE Z policy or flatten arbitrary 3D geometry. Contained positive-area contours
-   become INTERNAL_GEOMETRY; contained open/zero-area contours become INTERNAL_DIVIDERS.
-   Uncontained and ineligible entities retain their layers. Do not force
-   rejected BEND geometry onto a manufacturing layer merely to hide its name.
-6. Collapse only nonzero pure-2D LINE entities classified as INTERNAL_DIVIDERS.
+   become `internal_geometry_layer` (default `INTERNAL_GEOMETRY`); when
+   `group_external_and_internal_geometry_layers` is true, they instead use
+   `external_geometry_layer`. Contained open/zero-area contours become
+   `internal_dividers_layer` (default `INTERNAL_DIVIDERS`). Uncontained and
+   ineligible entities retain their layers. Do not force rejected BEND geometry
+   onto a manufacturing layer merely to hide its name.
+6. Collapse only nonzero pure-2D LINE entities classified as
+   `internal_dividers_layer`.
    Exempt explicit source BEND axes: nearby independently labeled folds must
    remain separate, regardless of line length or proximity.
    Match display attributes and parallel directions, allowing reversed endpoints.

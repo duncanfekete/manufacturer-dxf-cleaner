@@ -17,9 +17,9 @@ from ezdxf.lldxf.tagwriter import TagWriter
 from ezdxf.lldxf.types import DXFTag
 from typing_extensions import TypedDict
 
-from dxf_editing_functions.group_parts import group_parts
-from dxf_editing_functions.join_edges import join_edges
-from dxf_editing_functions.seperate_into_layers import separate_layers
+from benchmark.dxf_editing_functions.group_parts import group_parts
+from benchmark.dxf_editing_functions.join_edges import join_edges
+from benchmark.dxf_editing_functions.seperate_into_layers import separate_layers
 
 ResultT = TypeVar("ResultT")
 
