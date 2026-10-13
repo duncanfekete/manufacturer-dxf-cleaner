@@ -33,7 +33,7 @@ def separate_layers(
     -> Polylines and circles fully contained within the boundary, with positive area.
     3. Identify internal dividers and move them to a dedicated layer.
     -> Lines and polylines fully contained within the outermost polyline, and with no area.
-    4. Move TEXT and MTEXT to the text layer.
+    4. Move TEXT and MTEXT to the text layer, except IGNORE annotations.
     5. Remove unused source layers, retaining the required layer 0.
 
     Layer names are configurable and default to EXTERNAL_GEOMETRY,
@@ -60,6 +60,7 @@ def separate_layers(
     their positive-area polygonal components. Repairs without polygonal area
     raise ValueError before layers are changed. Polygon repairs do not modify source geometry.
     Explicit etch/engraving layers retain their source layers and are not cuts or dividers.
+    IGNORE entities retain their layer and are excluded from classification.
     Other entities and uncontained contours retain their original layers.
     Layers referenced by other entities, blocks, or layouts are retained.
     If there is no positive-area closed contour, no classification occurs;
@@ -74,6 +75,8 @@ def separate_layers(
     contours = []
     bend_handles = set()
     for entity in doc.modelspace().query("LINE LWPOLYLINE POLYLINE CIRCLE"):
+        if entity.dxf.layer.casefold() == "ignore":
+            continue
         if entity.dxf.layer.upper() == "BEND_EXTENT":
             doc.modelspace().delete_entity(entity)
             continue
@@ -301,7 +304,8 @@ def separate_layers(
 
     # Step 3: Normalize the annotation layer regardless of its source name.
     for entity in doc.modelspace().query("TEXT MTEXT"):
-        entity.dxf.layer = "TEXT"
+        if entity.dxf.layer.casefold() != "ignore":
+            entity.dxf.layer = "TEXT"
 
     # Step 4: Remove unused layers without breaking block or layout references.
     used_layers = {

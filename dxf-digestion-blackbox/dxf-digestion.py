@@ -16,13 +16,13 @@ from benchmark.dxf_editing_functions.seperate_into_layers import separate_layers
 
 
 def process_drawing(drawing: Drawing) -> list[Drawing]:
-    """Return organised parts followed by details using the benchmark's rules.
+    """Return organised parts with IGNORE details using the benchmark's rules.
 
     Accept an already-loaded Drawing and keep every processing stage in memory.
     Joining modifies the supplied drawing in place; grouping creates independent
-    part drawings, which are then classified in place. The last returned drawing
-    always contains annotations and detected sheet details, without part-layer
-    classification. Empty and details-only inputs return just that drawing.
+    part drawings, which are then classified in place. Every part includes all
+    annotations and detected sheet details on IGNORE, excluded from part-layer
+    classification. Empty and details-only inputs return an empty list.
 
     No DXF files are read or written, no recovery reader is invoked, and no
     benchmark counts are computed. The caller owns loading, saving, and handling
@@ -35,11 +35,8 @@ def process_drawing(drawing: Drawing) -> list[Drawing]:
     joined_drawing = join_edges(drawing)
 
     # Step 2: Split the joined geometry, just as split_dxf_parts does.
-    # group_parts copies each part into its own Drawing and returns annotations
-    # and detected sheet details separately. The benchmark saves those details,
-    # but only passes manufacturing parts to layer organisation; do the same here
-    # without writing part_N.dxf or details.dxf.
-    parts, details = group_parts(joined_drawing)
+    # Each independent part includes the sheet details on IGNORE.
+    parts = group_parts(joined_drawing)
 
     # Step 3: Organise each part, just as organize_layers does.
     # Classify the external profile, internal cuts, and internal dividers while
@@ -50,7 +47,4 @@ def process_drawing(drawing: Drawing) -> list[Drawing]:
     for part in parts:
         organised_parts.append(separate_layers(part))
 
-    # Step 4: Include the equivalent of details.dxf after the organised parts.
-    # Keep its source layers rather than classifying it as manufacturing geometry.
-    # Always include it, even when empty, so the final item has a stable meaning.
-    return [*organised_parts, details]
+    return organised_parts

@@ -11,8 +11,8 @@ folding, or marking operations.
    prevent a profile from being recognised as a continuous contour. Join compatible
    connected edges and bridge small gaps within a configurable tolerance.
 2. **Split into separate parts.** Group geometry belonging to each manufacturing
-   part and produce a separate DXF for each part, keeping drawing-sheet details
-   separate where they can be identified.
+   part and produce a separate DXF for each part, including all annotations and
+   identified drawing-sheet details on an `IGNORE` layer in every part.
 3. **Organise manufacturing layers.** Decompose each part into an external profile,
    internal cut geometry, and internal dividers such as fold lines. Preserve
    explicitly named etching and engraving layers separately from cuts and folds.

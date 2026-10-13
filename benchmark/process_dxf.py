@@ -145,15 +145,15 @@ def split_dxf_parts(file_path: str) -> list[str]:
     """
     Receives an edge_joined or original_file dxf file path and splits it into separate parts.
     Each part is saved as a separate DXF file in the same directory as the input file.
-    All modelspace TEXT/MTEXT and entities on the TEXT layer are filtered into
-    details.dxf with detected sheet details, not copied into manufacturing parts.
+    All modelspace TEXT/MTEXT, entities on TEXT or IGNORE, and detected sheet
+    details are copied onto IGNORE in every part, without affecting grouping.
+    No separate details DXF is written.
     
     Returns the part paths, or an empty list if the drawing contains no geometry.
     """
     source_path = Path(file_path)
     doc = ezdxf.readfile(source_path)
-    parts, details = group_parts(doc)
-    details.saveas(source_path.with_name("details.dxf"))
+    parts = group_parts(doc)
     output_paths: list[str] = []
     for index, part in enumerate(parts, start=1):
         output_path = source_path.with_name(f"part_{index}.dxf")

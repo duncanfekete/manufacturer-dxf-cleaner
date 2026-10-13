@@ -91,9 +91,12 @@ Run `python -m benchmark --help` to see the accepted root-directory argument.
 
 Processed files are written under `results/`, mirroring the dataset subdirectories
 and using a folder for each source drawing. Outputs include `original_file.dxf`,
-`edge_joined.dxf`, separate `part_N.dxf` files, `details.dxf`, and
+`edge_joined.dxf`, separate `part_N.dxf` files, and
 `part_N_organized.dxf` files. These stages let you inspect how joining, grouping,
-and layer classification affect a drawing.
+and layer classification affect a drawing. Every part includes all annotations
+and detected sheet details on `IGNORE`, at their original coordinates. That layer
+is excluded from manufacturing classification and counts. No separate
+`details.dxf` is written; existing outputs are not deleted.
 
 ## DXF Viewer
 

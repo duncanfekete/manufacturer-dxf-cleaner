@@ -9,7 +9,7 @@ Case-specific investigation and the latest benchmark status belong in
 
 1. Preserve a byte-for-byte source copy as `original_file.dxf`.
 2. Clean and join modelspace edges; save `edge_joined.dxf`.
-3. Separate manufacturing parts from details; save `part_N.dxf` and `details.dxf`.
+3. Separate manufacturing parts; save `part_N.dxf` with all details on `IGNORE`.
    Return the current output paths. Do not delete previous outputs or perform
    output-directory housekeeping inside the editing functions.
 4. Classify each part's layers; save `part_N_organized.dxf`.
@@ -113,8 +113,8 @@ drawing extents as details without sheet-frame evidence.
    entities within one band width of a selected detail, but only if their entire
    geometry remains inside the fixed edge band, buffered by the group gap tolerance.
    Compare frame paths, not their filled polygon areas, when clustering.
-7. Exclude selected details from part grouping and copy them to `details.dxf`,
-   including dependencies such as title-table block contents.
+7. Exclude selected details from part grouping and copy them onto `IGNORE` in
+   every part, including dependencies such as title-table block contents.
 
 This is conservative, not universal drawing-sheet recognition. Single-frame
 sheets and parts crossing the band may not be extracted. Nested rectangular
@@ -124,9 +124,9 @@ change the drawing bounds used to recognize frames.
 ## 5. Parts, annotations and unsupported bounds
 
 1. Filter all modelspace TEXT/MTEXT entity types into details, regardless of source
-   layer or whether they overlap a part. They cannot connect parts or appear in
-   manufacturing part files. Also filter any modelspace entity whose source layer
-   is exactly TEXT, case-insensitively, including outlined lettering geometry.
+   layer or whether they overlap a part. They cannot connect manufacturing parts.
+   Also filter any modelspace entity whose source layer is exactly TEXT or IGNORE,
+   case-insensitively, including outlined lettering geometry.
    Text inside block references is not independently
    filtered; INSERT references remain whole entities.
 2. Require finite, computable bounds for each entity. Raise on unsupported or
@@ -142,11 +142,14 @@ change the drawing bounds used to recognize frames.
    Combined bounds are not a closed exterior polygon: concave or open components
    can enclose unrelated objects in their bounding rectangle. Nested independent
    manufactured parts can also be absorbed; this heuristic does not infer intent.
-5. Copy all filtered text and sheet-selected entities to details with dependencies.
-   Do not reattach overlapping text to parts. Preserve annotations in the input
-   drawing and original copy rather than deleting them.
+5. Copy all filtered text and sheet-selected entities with dependencies onto
+   IGNORE in every part, at their original coordinates. Detail block contents and
+   attached attributes also use IGNORE; conflicting block names are renamed so
+   manufacturing block layers remain unchanged. Preserve annotations in the
+   input drawing and original copy rather than deleting them.
 6. Copy each group's entities and dependent resources into a same-version drawing.
-   No remaining geometry means no part files, although details may still exist.
+   Return only the part drawings. No remaining geometry means an empty list and
+   no part files or separate details file. Existing outputs are not deleted.
 
 Implementation for sections 4-5:
 [dxf_editing_functions/group_parts.py](dxf_editing_functions/group_parts.py).
@@ -161,7 +164,7 @@ Implementation for sections 4-5:
    For source BEND LINEs only, set both endpoint Z values to zero when both
    are finite and within 1e-6, extrusion is exactly (0, 0, 1), and thickness is
    zero. Preserve handles and XY coordinates; still require the pure-2D test.
-   Skip layers with explicit ETCH, ETCHING, ENGRAVE or ENGRAVING name tokens.
+   Skip IGNORE and layers with explicit ETCH, ETCHING, ENGRAVE or ENGRAVING name tokens.
    Do not classify unsupported entities merely because their bounds fit the part.
 2. Flatten eligible paths for classification only. Require finite XY coordinates.
    Recognize circles and the appropriate lightweight/classic polyline closure flag.
@@ -200,7 +203,8 @@ Implementation for sections 4-5:
    contained and no new span is created. Delete other members from processed
    output; do not change cutouts,
    unclassified lines, etching, or polyline dividers. Original copies remain intact.
-7. Normalize TEXT/MTEXT to TEXT after successful boundary selection.
+7. Normalize TEXT/MTEXT to TEXT after successful boundary selection, except
+   annotations on IGNORE, which retain that layer.
 8. Remove unused source layers only after checking live entity references throughout
    the document, including blocks and layouts. Keep layer 0 and organized layers;
    reset the active layer to 0 if its layer was removed.

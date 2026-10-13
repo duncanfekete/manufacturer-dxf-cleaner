@@ -85,26 +85,28 @@ def _sheet_detail_indices(entities, boxes, gap_tol):
 
 def group_parts(
     doc: Drawing, *, gap_tol: float = 0.01
-) -> tuple[List[Drawing], Drawing]:
+) -> List[Drawing]:
     """
     Using bounding box of items to group parts:
     1. Identify modelspace TEXT and MTEXT separately from geometry.
     2. Irrespectively of layers, create bounding boxes of all entities.
     3. Compare bounding boxes to determine which entities belong to the same part 
     -> If two bounding boxes overlap, or are within very close proximity, consider them part of the same group.
-    4. Copy all TEXT and MTEXT entities and sheet details to details.
-    5. Create a Drawing component per group of entities.
-    6. Return the grouped Drawing components and the details drawing.
+    4. Copy all TEXT and MTEXT entities and sheet details onto IGNORE.
+    5. Create a Drawing per group, including a copy of all IGNORE details.
+    6. Return the grouped Drawing components.
 
     Processes modelspace only, including block references as whole entities.
-    Returns (parts, details), preserving the source DXF version and units.
+    Returns parts, preserving the source DXF version and units.
     Sheet extraction requires two nested rectangular contours, each covering
     at least 80% of the drawing bounds, and a closed part inside their edge
     band. The band is 10% of the outer frame diagonal. Part contours and their
     contents are protected; edge-detail clustering cannot leave the fixed band.
     Curves use flattened XY paths; annotations and block references use bounds.
     All modelspace TEXT/MTEXT entities and entities on the case-insensitive
-    TEXT layer are filtered out of parts and copied to details. Outlined
+    TEXT or IGNORE layer are excluded from grouping and copied onto IGNORE
+    in every part, at their original coordinates. Imported detail block contents
+    and attached attributes also use IGNORE, without changing part blocks. Outlined
     lettering without that source layer is not automatically recognized.
     Proximity is the shortest 3D distance between boxes in drawing units.
     Group membership is transitive. Groups wholly enclosed by another group's
@@ -124,7 +126,7 @@ def group_parts(
     text_indices = {
         index for index, entity in enumerate(entities)
         if entity.dxftype() in {"TEXT", "MTEXT"}
-        or entity.dxf.layer.casefold() == "text"
+        or entity.dxf.layer.casefold() in {"text", "ignore"}
     }
 
     # Step 2: Compute one bounding box per entity, ignoring layers.
@@ -193,7 +195,7 @@ def group_parts(
         groups.pop(inner)
         group_boxes.pop(inner)
 
-    # Step 4: Keep all text and sheet annotations in details, not part files.
+    # Step 4: Collect all text and sheet annotations with their dependencies.
     detail_handles = {
         entities[index].dxf.handle for index in sheet_details | text_indices
     }
@@ -209,7 +211,17 @@ def group_parts(
         xref.load_modelspace(
             doc, component, filter_fn=lambda entity: entity.dxf.handle in handles
         )
+        part_handles = set(component.entitydb)
+        # Keep detail blocks independent so changing their layers cannot affect parts.
+        xref.load_modelspace(
+            details, component, conflict_policy=xref.ConflictPolicy.XREF_PREFIX
+        )
+        if "IGNORE" not in component.layers:
+            component.layers.new("IGNORE")
+        for handle, entity in component.entitydb.items():
+            if handle not in part_handles and entity.is_alive and entity.dxf.hasattr("layer"):
+                entity.dxf.layer = "IGNORE"
         components.append(component)
 
-    # Step 6: Return parts and details; no geometry produces an empty parts list.
-    return components, details
+    # Step 6: No manufacturing geometry produces an empty parts list.
+    return components

@@ -11,14 +11,14 @@ def process_drawing(drawing: Drawing) -> list[Drawing]:
 It joins broken edges, splits manufacturing parts, and organises each part's
 layers using the same helpers and default tolerances as the
 [benchmark](../benchmark/README.md). The returned list contains the equivalents
-of `part_N_organized.dxf` followed by `details.dxf`, without saving or reloading
+of `part_N_organized.dxf`, without saving or reloading
 intermediate files.
 
 Joining modifies the supplied drawing in place. Grouping creates independent
-part drawings, which are then organised in place. The final drawing always
-contains annotations and detected sheet details, retaining their source layers
-without manufacturing-layer classification. It is included even when empty;
-empty or details-only inputs return a list containing just the details drawing.
+part drawings, which are then organised in place. Every returned part includes
+all annotations and detected sheet details on `IGNORE`, at their original
+coordinates and without manufacturing-layer classification. There is no separate
+details drawing; empty or details-only inputs return an empty list.
 Processing exceptions propagate to the caller.
 
 The caller handles loading, saving, and any malformed-file recovery. This API
@@ -46,7 +46,6 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 # drawing is an ezdxf Drawing already loaded or created by the caller.
-outputs = module.process_drawing(drawing)
-organised_parts = outputs[:-1]
-details = outputs[-1]
+organised_parts = module.process_drawing(drawing)
+# Each part's modelspace includes its own copy of the IGNORE details.
 ```
