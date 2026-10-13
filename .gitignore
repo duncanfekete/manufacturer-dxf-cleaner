@@ -1,6 +1,6 @@
 # Private input and generated output.
 /datasets/private_dataset/
-/results/
+/benchmark/results/
 /cmds
 
 # Local Python environment and bytecode.
