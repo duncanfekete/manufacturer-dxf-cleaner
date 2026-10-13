@@ -11,15 +11,18 @@ folding, or marking operations.
    prevent a profile from being recognised as a continuous contour. Join compatible
    connected edges and bridge small gaps within a configurable tolerance.
 2. **Split into separate parts.** Group geometry belonging to each manufacturing
-   part and produce a separate DXF for each part, including all annotations and
-   identified drawing-sheet details on an `IGNORE` layer in every part.
+   part and produce a separate DXF for each part. Attach etch/engraving content
+   to its owning part; copy shared annotations and identified sheet details to
+   every part on `IGNORE`.
 3. **Organise manufacturing layers.** Decompose each part into an external profile,
    internal cut geometry, and internal dividers such as fold lines. Preserve
-   explicitly named etching and engraving layers separately from cuts and folds.
+   explicitly named etching and engraving content on `ETCH`, separate from cuts
+   and folds. Put unclassified content on layer `0` for downstream review.
 
 The organised output uses `EXTERNAL_GEOMETRY`, `INTERNAL_GEOMETRY`, and
-`INTERNAL_DIVIDERS` to make geometry easier to inspect and interpret for downstream
-manufacturing processes such as laser cutting and sheet-metal fabrication.
+`INTERNAL_DIVIDERS`, alongside `ETCH`, `IGNORE`, and `0`. Other source layers are
+removed after their entities are routed to these output layers, including block
+contents and layouts.
 
 Processing preserves a copy of the source drawing and saves intermediate outputs
 for inspection. Tolerances are in drawing units, not automatically millimetres.

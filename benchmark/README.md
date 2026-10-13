@@ -77,8 +77,13 @@ Resolved counts are measured by reloading the final organized DXF. Each supporte
 entity on `INTERNAL_GEOMETRY` or `INTERNAL_DIVIDERS` counts once; separate divider
 segments remain separate counts unless processing actually combines them in the
 saved file. Benchmark counting performs no logical gap or proximity merging. Layers
-with explicit `ETCH`, `ETCHING`, `ENGRAVE`, or `ENGRAVING` name tokens retain
-their source layers and are excluded from cut/fold classification.
+containing `etch` or `engrav` (case-insensitive) are detected before shared-detail
+extraction and excluded from geometry grouping and cut/fold classification.
+An etch entity is assigned only when its bounds overlap or lie within the group
+tolerance of exactly one part's combined bounds. It is then copied to that part
+on `ETCH`, including dependent block contents and attached attributes.
+Unassigned or ambiguous etch content emits a warning and becomes shared `IGNORE`
+content instead; it cannot create or connect parts.
 Legacy JSON files with aggregate counts must be updated to this format before
 registration. Reports include expected and resolved counts, each DXF's pass
 status, processing errors, and total/pass/fail counts. Structurally malformed
@@ -93,10 +98,26 @@ Processed files are written under `results/`, mirroring the dataset subdirectori
 and using a folder for each source drawing. Outputs include `original_file.dxf`,
 `edge_joined.dxf`, separate `part_N.dxf` files, and
 `part_N_organized.dxf` files. These stages let you inspect how joining, grouping,
-and layer classification affect a drawing. Every part includes all annotations
+and layer classification affect a drawing. Every part includes shared annotations
 and detected sheet details on `IGNORE`, at their original coordinates. That layer
 is excluded from manufacturing classification and counts. No separate
 `details.dxf` is written; existing outputs are not deleted.
+Layer organisation adds an `ETCH` placeholder layer to every organised part,
+retained even when empty. The default final layer set is `0`, `ETCH`, `IGNORE`,
+`EXTERNAL_GEOMETRY`, `INTERNAL_GEOMETRY`, and `INTERNAL_DIVIDERS`.
+Non-manufacturing annotations (text, attributes, dimensions, leaders, hatches,
+images, and wipeouts) use `IGNORE` unless explicitly routed to `ETCH`.
+Unclassified geometry and other unknown content use `0` for downstream review.
+Normalization includes block contents, attached entities, and layouts, and also
+runs when no eligible boundary exists. Source layers, including `TEXT`, are
+removed after routing. The output layer set is checked in serialized DXFs;
+ezdxf itself recreates an empty `Defpoints` layer when reading them.
+
+Run the focused layer-policy regression tests from the repository root:
+
+```sh
+python -m unittest benchmark.test_layer_policy
+```
 
 ## DXF Viewer
 

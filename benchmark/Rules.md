@@ -95,6 +95,8 @@ Implementation: [dxf_editing_functions/join_edges.py](dxf_editing_functions/join
 
 Apply this before ordinary part grouping. Do not classify everything near the
 drawing extents as details without sheet-frame evidence.
+Detect etch/engraving intent first and exclude those entities from sheet paths
+and drawing bounds so etch content cannot become a sheet frame.
 
 1. Construct flattened XY paths for supported curve entities. For annotations,
    block references and other bounded entities, use their XY bounding rectangles.
@@ -123,8 +125,15 @@ change the drawing bounds used to recognize frames.
 
 ## 5. Parts, annotations and unsupported bounds
 
-1. Filter all modelspace TEXT/MTEXT entity types into details, regardless of source
-   layer or whether they overlap a part. They cannot connect manufacturing parts.
+1. First extract modelspace entities whose layer contains etch or engrav
+   (case-insensitive). Exclude them from sheet detection and geometry grouping.
+   After grouping, assign each to a part only when its bounds overlap or lie
+   within gap_tol of exactly one part's combined bounds. Copy owned etch content
+   onto ETCH in that part, with independent block resources and attributes.
+   Warn for unassigned or ambiguous etch content and put it on shared IGNORE.
+   Etch-only inputs produce no parts; warn that their content remains in the source.
+   Filter other TEXT/MTEXT, attributes, dimensions, leaders, hatches, images,
+   and wipeouts into shared details. They cannot connect manufacturing parts.
    Also filter any modelspace entity whose source layer is exactly TEXT or IGNORE,
    case-insensitively, including outlined lettering geometry.
    Text inside block references is not independently
@@ -146,7 +155,8 @@ change the drawing bounds used to recognize frames.
    IGNORE in every part, at their original coordinates. Detail block contents and
    attached attributes also use IGNORE; conflicting block names are renamed so
    manufacturing block layers remain unchanged. Preserve annotations in the
-   input drawing and original copy rather than deleting them.
+   input drawing and original copy rather than deleting them. Owned etch
+   content is not included in these shared details.
 6. Copy each group's entities and dependent resources into a same-version drawing.
    Return only the part drawings. No remaining geometry means an empty list and
    no part files or separate details file. Existing outputs are not deleted.
@@ -164,7 +174,7 @@ Implementation for sections 4-5:
    For source BEND LINEs only, set both endpoint Z values to zero when both
    are finite and within 1e-6, extrusion is exactly (0, 0, 1), and thickness is
    zero. Preserve handles and XY coordinates; still require the pure-2D test.
-   Skip IGNORE and layers with explicit ETCH, ETCHING, ENGRAVE or ENGRAVING name tokens.
+   Skip IGNORE, TEXT, and layers containing etch or engrav (case-insensitive).
    Do not classify unsupported entities merely because their bounds fit the part.
 2. Flatten eligible paths for classification only. Require finite XY coordinates.
    Recognize circles and the appropriate lightweight/classic polyline closure flag.
@@ -174,8 +184,8 @@ Implementation for sections 4-5:
    the source DXF contour remains one entity. Raise if repair has no qualifying polygon.
 4. Select the largest positive-area candidate as `external_geometry_layer`
    (default `EXTERNAL_GEOMETRY`). If no candidate exists, return without
-   classification; extent cleanup still applies. This is not currently an
-   exception.
+   classification; extent cleanup and final layer routing still apply.
+   This is not currently an exception.
 5. Test each other contour's entire geometry against the exterior using covers:
    touching is permitted. LINE dividers use a 1e-6 drawing-unit boundary buffer
    to tolerate endpoint noise. Explicit source BEND entities instead use the
@@ -186,8 +196,8 @@ Implementation for sections 4-5:
    `group_external_and_internal_geometry_layers` is true, they instead use
    `external_geometry_layer`. Contained open/zero-area contours become
    `internal_dividers_layer` (default `INTERNAL_DIVIDERS`). Uncontained and
-   ineligible entities retain their layers. Do not force rejected BEND geometry
-   onto a manufacturing layer merely to hide its name.
+   ineligible geometry goes to 0 during finalization. Do not force rejected BEND
+   geometry onto a manufacturing layer merely to hide its name.
 6. Collapse only nonzero pure-2D LINE entities classified as
    `internal_dividers_layer`.
    Exempt explicit source BEND axes: nearby independently labeled folds must
@@ -203,11 +213,18 @@ Implementation for sections 4-5:
    contained and no new span is created. Delete other members from processed
    output; do not change cutouts,
    unclassified lines, etching, or polyline dividers. Original copies remain intact.
-7. Normalize TEXT/MTEXT to TEXT after successful boundary selection, except
-   annotations on IGNORE, which retain that layer.
-8. Remove unused source layers only after checking live entity references throughout
-   the document, including blocks and layouts. Keep layer 0 and organized layers;
-   reset the active layer to 0 if its layer was removed.
+7. Finalize layers throughout the document, including blocks, attributes,
+   classic polyline vertices, and layouts. Explicit IGNORE/TEXT references use
+   IGNORE; otherwise layer names containing etch or engrav use ETCH.
+   Non-manufacturing annotations use IGNORE unless routed to ETCH. Preserve the
+   layers of successfully classified manufacturing entities; put everything
+   unclassified on 0. Polyline subentities follow their parent, as do attributes
+   of ETCH/IGNORE block references. This also occurs without an eligible boundary.
+8. Keep only 0, ETCH, IGNORE, and the configured manufacturing layers, creating
+   placeholders even when empty. Remove all other source layers after routing
+   their entities. Clear removed layers from viewport frozen-layer lists, and
+   reset the active layer to 0 if its layer was removed. Serialized DXFs contain
+   only this set; ezdxf recreates an empty Defpoints layer when reading.
 
 Polygon repair remains analysis-only, not a replacement manufacturing contour.
 Parallel divider collapse explicitly changes saved LINE geometry after classification.

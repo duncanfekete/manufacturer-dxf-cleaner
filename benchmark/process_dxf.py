@@ -145,8 +145,10 @@ def split_dxf_parts(file_path: str) -> list[str]:
     """
     Receives an edge_joined or original_file dxf file path and splits it into separate parts.
     Each part is saved as a separate DXF file in the same directory as the input file.
-    All modelspace TEXT/MTEXT, entities on TEXT or IGNORE, and detected sheet
-    details are copied onto IGNORE in every part, without affecting grouping.
+    Shared annotations, entities on TEXT or IGNORE, and detected sheet details
+    are copied onto IGNORE in every part, without affecting grouping.
+    Etch/engraving content is attached only to a unique owning part on ETCH;
+    unassigned or ambiguous etch content warns and becomes shared IGNORE.
     No separate details DXF is written.
     
     Returns the part paths, or an empty list if the drawing contains no geometry.

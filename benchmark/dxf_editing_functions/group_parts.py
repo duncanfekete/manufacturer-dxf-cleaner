@@ -7,6 +7,49 @@ from ezdxf import bbox, path, xref
 from ezdxf.document import Drawing
 from shapely.geometry import LineString, Polygon, box as geometry_box
 
+from .layer_policy import ANNOTATION_TYPES, is_etch_layer
+
+
+def _box_distance(first, second):
+    return math.hypot(*(
+        max(first_min - second_max, second_min - first_max, 0.0)
+        for first_min, first_max, second_min, second_max in zip(
+            first.extmin, first.extmax, second.extmin, second.extmax
+        )
+    ))
+
+
+def _load_modelspace(
+    source: Drawing, target: Drawing, *,
+    filter_fn=None, conflict_policy=xref.ConflictPolicy.KEEP,
+) -> None:
+    # ezdxf's resource mapper writes mapped linetypes back onto source layers.
+    linetypes = [(layer, layer.dxf.get("linetype")) for layer in source.layers]
+    try:
+        xref.load_modelspace(source, target, filter_fn=filter_fn, conflict_policy=conflict_policy)
+    finally:
+        for layer, linetype in linetypes:
+            if linetype is None:
+                layer.dxf.discard("linetype")
+            else:
+                layer.dxf.linetype = linetype
+
+
+def _load_on_layer(source, target, handles, layer):
+    if not handles:
+        return
+    existing_handles = set(target.entitydb)
+    _load_modelspace(
+        source, target,
+        filter_fn=lambda entity: entity.dxf.handle in handles,
+        conflict_policy=xref.ConflictPolicy.XREF_PREFIX,
+    )
+    if layer not in target.layers:
+        target.layers.new(layer)
+    for handle, entity in target.entitydb.items():
+        if handle not in existing_handles and entity.is_alive and entity.dxf.hasattr("layer"):
+            entity.dxf.layer = layer
+
 
 def _sheet_detail_indices(entities, boxes, gap_tol):
     # Step 1: Find large nested rectangular contours near the drawing extents.
@@ -88,11 +131,11 @@ def group_parts(
 ) -> List[Drawing]:
     """
     Using bounding box of items to group parts:
-    1. Identify modelspace TEXT and MTEXT separately from geometry.
+    1. Identify etch intent and annotations separately from geometry.
     2. Irrespectively of layers, create bounding boxes of all entities.
     3. Compare bounding boxes to determine which entities belong to the same part 
     -> If two bounding boxes overlap, or are within very close proximity, consider them part of the same group.
-    4. Copy all TEXT and MTEXT entities and sheet details onto IGNORE.
+    4. Assign etch entities to a single part by bounding-box proximity.
     5. Create a Drawing per group, including a copy of all IGNORE details.
     6. Return the grouped Drawing components.
 
@@ -103,9 +146,14 @@ def group_parts(
     band. The band is 10% of the outer frame diagonal. Part contours and their
     contents are protected; edge-detail clustering cannot leave the fixed band.
     Curves use flattened XY paths; annotations and block references use bounds.
-    All modelspace TEXT/MTEXT entities and entities on the case-insensitive
-    TEXT or IGNORE layer are excluded from grouping and copied onto IGNORE
-    in every part, at their original coordinates. Imported detail block contents
+    Etch/engraving layers are detected before annotations or sheet details and
+    excluded from geometry grouping and sheet detection. Etch entities whose
+    bounds overlap or lie within gap_tol of exactly one group's bounds are
+    copied only to that part on ETCH. Unassigned or ambiguous etch entities
+    emit a warning and become shared IGNORE details.
+    Other annotations and entities on the case-insensitive TEXT or IGNORE layer
+    are excluded from grouping and copied onto IGNORE in every part,
+    at their original coordinates. Imported detail block contents
     and attached attributes also use IGNORE, without changing part blocks. Outlined
     lettering without that source layer is not automatically recognized.
     Proximity is the shortest 3D distance between boxes in drawing units.
@@ -120,13 +168,19 @@ def group_parts(
     if not math.isfinite(gap_tol) or gap_tol < 0:
         raise ValueError("gap_tol must be finite and non-negative")
 
-    # Step 1: Identify text separately so it cannot connect geometry groups.
+    # Step 1: Preserve etch intent before extracting shared annotations.
     details = ezdxf.new(dxfversion=doc.dxfversion, units=doc.units)
     entities = list(doc.modelspace())
+    etch_indices = {
+        index for index, entity in enumerate(entities)
+        if is_etch_layer(entity.dxf.layer)
+    }
     text_indices = {
         index for index, entity in enumerate(entities)
-        if entity.dxftype() in {"TEXT", "MTEXT"}
-        or entity.dxf.layer.casefold() in {"text", "ignore"}
+        if index not in etch_indices and (
+            entity.dxftype() in ANNOTATION_TYPES
+            or entity.dxf.layer.casefold() in {"text", "ignore"}
+        )
     }
 
     # Step 2: Compute one bounding box per entity, ignoring layers.
@@ -157,8 +211,15 @@ def group_parts(
         boxes.append(box)
 
     # Step 3: Extract bounded sheet-edge details before grouping parts.
-    sheet_details = _sheet_detail_indices(entities, boxes, gap_tol)
-    remaining = set(range(len(entities))) - text_indices - non_spatial_indices - sheet_details
+    sheet_details = _sheet_detail_indices(
+        entities,
+        [None if index in etch_indices else bounds for index, bounds in enumerate(boxes)],
+        gap_tol,
+    )
+    remaining = (
+        set(range(len(entities))) - text_indices - etch_indices
+        - non_spatial_indices - sheet_details
+    )
     groups = []
     while remaining:
         start = min(remaining)
@@ -169,13 +230,7 @@ def group_parts(
             current = boxes[pending.pop()]
             for candidate in sorted(remaining):
                 other = boxes[candidate]
-                axis_gaps = (
-                    max(first_min - second_max, second_min - first_max, 0.0)
-                    for first_min, first_max, second_min, second_max in zip(
-                        current.extmin, current.extmax, other.extmin, other.extmax
-                    )
-                )
-                if math.hypot(*axis_gaps) <= gap_tol:
+                if _box_distance(current, other) <= gap_tol:
                     remaining.remove(candidate)
                     group.append(candidate)
                     pending.append(candidate)
@@ -195,32 +250,53 @@ def group_parts(
         groups.pop(inner)
         group_boxes.pop(inner)
 
-    # Step 4: Collect all text and sheet annotations with their dependencies.
+    # Step 4: Assign etch content without allowing it to connect or create parts.
+    part_etch_indices = [set() for _ in groups]
+    ignored_etch_indices = set()
+    for index in sorted(etch_indices - non_spatial_indices):
+        owners = [
+            owner for owner, bounds in enumerate(group_boxes)
+            if _box_distance(boxes[index], bounds) <= gap_tol
+        ]
+        if len(owners) == 1:
+            part_etch_indices[owners[0]].add(index)
+        else:
+            ignored_etch_indices.add(index)
+            destination = (
+                "retaining it as shared IGNORE content."
+                if groups else "no part output exists; retained only in the source drawing."
+            )
+            warnings.warn(
+                f"Etch entity {entities[index].dxftype()} (handle {entities[index].dxf.handle}) "
+                f"matches {len(owners)} parts; {destination}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     detail_handles = {
-        entities[index].dxf.handle for index in sheet_details | text_indices
+        entities[index].dxf.handle
+        for index in sheet_details | text_indices | ignored_etch_indices
     }
-    xref.load_modelspace(
+    _load_modelspace(
         doc, details, filter_fn=lambda entity: entity.dxf.handle in detail_handles
     )
 
     # Step 5: Copy each group and its dependent resources into a new drawing.
     components = []
-    for group in groups:
+    for group, etch_group in zip(groups, part_etch_indices):
         component = ezdxf.new(dxfversion=doc.dxfversion, units=doc.units)
         handles = {entities[index].dxf.handle for index in group}
-        xref.load_modelspace(
+        _load_modelspace(
             doc, component, filter_fn=lambda entity: entity.dxf.handle in handles
         )
-        part_handles = set(component.entitydb)
-        # Keep detail blocks independent so changing their layers cannot affect parts.
-        xref.load_modelspace(
-            details, component, conflict_policy=xref.ConflictPolicy.XREF_PREFIX
+        _load_on_layer(
+            doc, component,
+            {entities[index].dxf.handle for index in etch_group}, "ETCH",
         )
-        if "IGNORE" not in component.layers:
-            component.layers.new("IGNORE")
-        for handle, entity in component.entitydb.items():
-            if handle not in part_handles and entity.is_alive and entity.dxf.hasattr("layer"):
-                entity.dxf.layer = "IGNORE"
+        _load_on_layer(
+            details, component,
+            {entity.dxf.handle for entity in details.modelspace()}, "IGNORE",
+        )
         components.append(component)
 
     # Step 6: No manufacturing geometry produces an empty parts list.

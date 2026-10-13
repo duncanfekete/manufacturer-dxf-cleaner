@@ -16,10 +16,16 @@ intermediate files.
 
 Joining modifies the supplied drawing in place. Grouping creates independent
 part drawings, which are then organised in place. Every returned part includes
-all annotations and detected sheet details on `IGNORE`, at their original
+shared annotations and detected sheet details on `IGNORE`, at their original
 coordinates and without manufacturing-layer classification. There is no separate
 details drawing; empty or details-only inputs return an empty list.
 Processing exceptions propagate to the caller.
+Etch/engraving intent is detected before detail extraction and copied only to
+a uniquely owning part on `ETCH`. Ambiguous or unassigned etch content emits a
+warning and becomes shared `IGNORE` instead. Unclassified content uses `0`.
+Final layers are `0`, `ETCH`, `IGNORE`, `EXTERNAL_GEOMETRY`, `INTERNAL_GEOMETRY`,
+and `INTERNAL_DIVIDERS`; other source layers are removed after routing their
+entities, including block contents and layouts.
 
 The caller handles loading, saving, and any malformed-file recovery. This API
 does not read or write DXFs, run benchmarks, or compute benchmark counts.

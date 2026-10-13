@@ -21,8 +21,11 @@ def process_drawing(drawing: Drawing) -> list[Drawing]:
     Accept an already-loaded Drawing and keep every processing stage in memory.
     Joining modifies the supplied drawing in place; grouping creates independent
     part drawings, which are then classified in place. Every part includes all
-    annotations and detected sheet details on IGNORE, excluded from part-layer
-    classification. Empty and details-only inputs return an empty list.
+    shared annotations and detected sheet details on IGNORE, excluded from
+    part-layer classification. Owned etch/engraving content uses ETCH; ambiguous
+    or unassigned etch content warns and becomes shared IGNORE. Unclassified
+    content uses 0, and only the canonical output layers remain.
+    Empty and details-only inputs return an empty list.
 
     No DXF files are read or written, no recovery reader is invoked, and no
     benchmark counts are computed. The caller owns loading, saving, and handling
@@ -40,7 +43,8 @@ def process_drawing(drawing: Drawing) -> list[Drawing]:
 
     # Step 3: Organise each part, just as organize_layers does.
     # Classify the external profile, internal cuts, and internal dividers while
-    # retaining explicit etching/engraving layers. These returned drawings are
+    # routing etching/engraving to ETCH and unclassified content to 0.
+    # These returned drawings are
     # the in-memory equivalents of the benchmark's part_N_organized.dxf outputs.
     # Skip saving, reloading, and counting: this interface returns geometry only.
     organised_parts: list[Drawing] = []

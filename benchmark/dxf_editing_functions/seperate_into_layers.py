@@ -1,18 +1,61 @@
 import math
-import re
 
 from ezdxf import edgesmith, path
 from ezdxf.document import Drawing
+from ezdxf.entities import Insert, Polyline, Viewport
 from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
 from shapely import make_valid
 from shapely.validation import explain_validity
 
 from .join_edges import STYLE_ATTRIBUTES
+from .layer_policy import ANNOTATION_TYPES, is_etch_layer
 
 DIVIDER_AXIS_TOL = 1e-6
 DIVIDER_GAP_MIN_RATIO = 0.1
 DIVIDER_GAP_MAX_RATIO = 0.5
+
+
+def _finalize_layers(
+    doc: Drawing, organized_layers: set[str], classified_handles: set[str]
+) -> Drawing:
+    for name in sorted(organized_layers):
+        if name not in doc.layers:
+            doc.layers.new(name)
+    for entity in doc.entitydb.values():
+        if not entity.is_alive or not entity.dxf.hasattr("layer"):
+            continue
+        if entity.dxf.layer.casefold() in {"ignore", "text"}:
+            entity.dxf.layer = "IGNORE"
+        elif is_etch_layer(entity.dxf.layer):
+            entity.dxf.layer = "ETCH"
+        elif entity.dxftype() in ANNOTATION_TYPES:
+            entity.dxf.layer = "IGNORE"
+        elif entity.dxf.handle not in classified_handles:
+            entity.dxf.layer = "0"
+
+    for entity in doc.entitydb.values():
+        if not entity.is_alive:
+            continue
+        if isinstance(entity, Polyline):
+            for child in entity.all_sub_entities():
+                child.dxf.layer = entity.dxf.layer
+        elif isinstance(entity, Insert) and entity.dxf.layer in {"ETCH", "IGNORE"}:
+            for child in entity.all_sub_entities():
+                child.dxf.layer = entity.dxf.layer
+
+    retained_layers = {name.casefold() for name in organized_layers}
+    for entity in doc.entitydb.values():
+        if entity.is_alive and isinstance(entity, Viewport):
+            entity.frozen_layers = [
+                name for name in entity.frozen_layers if name.casefold() in retained_layers
+            ]
+    for layer in list(doc.layers):
+        if layer.dxf.name.casefold() not in retained_layers:
+            doc.layers.remove(layer.dxf.name)
+    if doc.header.get("$CLAYER", "0").casefold() not in retained_layers:
+        doc.header["$CLAYER"] = "0"
+    return doc
 
 
 def separate_layers(
@@ -33,8 +76,8 @@ def separate_layers(
     -> Polylines and circles fully contained within the boundary, with positive area.
     3. Identify internal dividers and move them to a dedicated layer.
     -> Lines and polylines fully contained within the outermost polyline, and with no area.
-    4. Move TEXT and MTEXT to the text layer, except IGNORE annotations.
-    5. Remove unused source layers, retaining the required layer 0.
+    4. Move TEXT and MTEXT to IGNORE, except ETCH annotations.
+    5. Route unclassified content to 0 and remove non-output layers.
 
     Layer names are configurable and default to EXTERNAL_GEOMETRY,
     INTERNAL_GEOMETRY and INTERNAL_DIVIDERS. When
@@ -59,12 +102,16 @@ def separate_layers(
     Invalid positive-area polygons are repaired for classification only using
     their positive-area polygonal components. Repairs without polygonal area
     raise ValueError before layers are changed. Polygon repairs do not modify source geometry.
-    Explicit etch/engraving layers retain their source layers and are not cuts or dividers.
+    Entities whose source layer contains "etch" or "engrav"
+    (case-insensitive) move to ETCH and are not cuts or dividers.
+    Layer normalization includes blocks, attached entities, and layouts.
+    An ETCH placeholder layer is created if absent and retained even when empty.
     IGNORE entities retain their layer and are excluded from classification.
-    Other entities and uncontained contours retain their original layers.
-    Layers referenced by other entities, blocks, or layouts are retained.
+    Source TEXT layers and non-manufacturing annotations use IGNORE unless
+    routed to ETCH. Unclassified geometry and other unknown content use layer 0.
+    Only 0, IGNORE, ETCH, and the configured manufacturing layers remain.
     If there is no positive-area closed contour, no classification occurs;
-    supported BEND_EXTENT paths are still removed.
+    supported BEND_EXTENT paths are still removed and annotation layers normalized.
     """
     if not math.isfinite(max_sagitta) or max_sagitta <= 0:
         raise ValueError("max_sagitta must be finite and positive")
@@ -75,7 +122,7 @@ def separate_layers(
     contours = []
     bend_handles = set()
     for entity in doc.modelspace().query("LINE LWPOLYLINE POLYLINE CIRCLE"):
-        if entity.dxf.layer.casefold() == "ignore":
+        if entity.dxf.layer.casefold() in {"ignore", "text"}:
             continue
         if entity.dxf.layer.upper() == "BEND_EXTENT":
             doc.modelspace().delete_entity(entity)
@@ -89,8 +136,7 @@ def separate_layers(
                     for vertex in (entity.dxf.start, entity.dxf.end))):
                 entity.dxf.start = (entity.dxf.start.x, entity.dxf.start.y, 0)
                 entity.dxf.end = (entity.dxf.end.x, entity.dxf.end.y, 0)
-        layer_tokens = re.split(r"[\W_]+", entity.dxf.layer.upper())
-        if {"ETCH", "ETCHING", "ENGRAVE", "ENGRAVING"}.intersection(layer_tokens):
+        if is_etch_layer(entity.dxf.layer):
             continue
         if not edgesmith.is_pure_2d_entity(entity):
             continue
@@ -135,17 +181,18 @@ def separate_layers(
         contours.append((entity, geometry, contour_area))
 
     boundaries = [contour for contour in contours if contour[2] > area_tol]
-    if not boundaries:
-        return doc
-    external_entity, external_polygon, _ = max(boundaries, key=lambda contour: contour[2])
     organized_layers = {
-        "0", "TEXT", external_geometry_layer, internal_geometry_layer,
+        "0", "IGNORE", "ETCH", external_geometry_layer, internal_geometry_layer,
         internal_dividers_layer,
     }
+    if not boundaries:
+        return _finalize_layers(doc, organized_layers, set())
+    external_entity, external_polygon, _ = max(boundaries, key=lambda contour: contour[2])
     for name in sorted(organized_layers):
         if name not in doc.layers:
             doc.layers.new(name)
     external_entity.dxf.layer = external_geometry_layer
+    classified_handles = {external_entity.dxf.handle}
     contained_geometry_layer = (
         external_geometry_layer
         if group_external_and_internal_geometry_layers
@@ -164,6 +211,7 @@ def separate_layers(
         entity.dxf.layer = (
             contained_geometry_layer if contour_area > area_tol else internal_dividers_layer
         )
+        classified_handles.add(entity.dxf.handle)
 
     divider_groups = []
     for entity, geometry, _ in contours:
@@ -302,22 +350,4 @@ def separate_layers(
             previous_length = segment_length
         join_component()
 
-    # Step 3: Normalize the annotation layer regardless of its source name.
-    for entity in doc.modelspace().query("TEXT MTEXT"):
-        if entity.dxf.layer.casefold() != "ignore":
-            entity.dxf.layer = "TEXT"
-
-    # Step 4: Remove unused layers without breaking block or layout references.
-    used_layers = {
-        entity.dxf.layer.casefold()
-        for entity in doc.entitydb.values()
-        if entity.is_alive and entity.dxf.hasattr("layer")
-    }
-    retained_layers = {name.casefold() for name in organized_layers} | used_layers
-    for layer in list(doc.layers):
-        if layer.dxf.name.casefold() not in retained_layers:
-            doc.layers.remove(layer.dxf.name)
-    if doc.header.get("$CLAYER", "0").casefold() not in retained_layers:
-        doc.header["$CLAYER"] = "0"
-
-    return doc
+    return _finalize_layers(doc, organized_layers, classified_handles)
